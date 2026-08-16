@@ -9,23 +9,38 @@ from ..http_utils import request_json
 log = logging.getLogger(__name__)
 
 
+LANGUAGE_BY_COUNTRY = {
+    "id": "id",
+    "sg": "en",
+    "my": "en",
+    "th": "th",
+    "vn": "vi",
+    "us": "en",
+    "gb": "en",
+}
+
+
 class JSearchClient:
-    """JSearch client supporting RapidAPI or OpenWebNinja direct auth.
-
-    Backend is selected with JSEARCH_BACKEND=rapidapi|openwebninja.
-    """
-
-    def __init__(self, api_key: str, backend: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        backend: str | None = None,
+    ) -> None:
         self.api_key = api_key.strip()
+
         self.backend = (
             backend
             or os.getenv("JSEARCH_BACKEND")
             or "rapidapi"
         ).strip().lower()
 
-        if self.backend not in {"rapidapi", "openwebninja"}:
+        if self.backend not in {
+            "rapidapi",
+            "openwebninja",
+        }:
             raise ValueError(
-                "JSEARCH_BACKEND must be 'rapidapi' or 'openwebninja'"
+                "JSEARCH_BACKEND must be "
+                "'rapidapi' or 'openwebninja'"
             )
 
     def search(
@@ -36,7 +51,28 @@ class JSearchClient:
         date_posted: str = "month",
     ) -> list[dict[str, Any]]:
 
+        country = country.lower()
+
+        # -----------------------------------------------------
+        # OPENWEBNINJA
+        # -----------------------------------------------------
+
         if self.backend == "openwebninja":
+            language = LANGUAGE_BY_COUNTRY.get(
+                country,
+                "en",
+            )
+
+            log.info(
+                "JSearch request | backend=openwebninja | "
+                "country=%s | language=%s | "
+                "date_posted=%s | query=%r",
+                country,
+                language,
+                date_posted,
+                query,
+            )
+
             data = request_json(
                 "GET",
                 "https://api.openwebninja.com/jsearch/search-v2",
@@ -45,11 +81,17 @@ class JSearchClient:
                 },
                 params={
                     "query": query,
+                    "num_pages": 1,
                     "country": country,
-                    "language": "en",
+                    "language": language,
+                    "date_posted": date_posted,
                 },
                 attempts=1,
             )
+
+        # -----------------------------------------------------
+        # RAPIDAPI
+        # -----------------------------------------------------
 
         else:
             data = request_json(
@@ -69,39 +111,74 @@ class JSearchClient:
                 attempts=1,
             )
 
-        raw_data = data.get("data", [])
+        # -----------------------------------------------------
+        # RESPONSE DIAGNOSTICS
+        # -----------------------------------------------------
 
+        log.info(
+            "JSearch raw response | "
+            "status=%r | request_id=%r | "
+            "top_level_keys=%s",
+            data.get("status"),
+            data.get("request_id"),
+            list(data.keys()),
+        )
+
+        raw_data = data.get("data")
+
+        # OpenWebNinja:
+        #
+        # {
+        #   "data": {
+        #       "jobs": [...],
+        #       "cursor": "..."
+        #   }
+        # }
         if isinstance(raw_data, dict):
-            payload = raw_data.get(
-                "jobs",
-                raw_data.get("results", []),
-            )
-            data_shape = f"dict keys={list(raw_data.keys())}"
+            jobs = raw_data.get("jobs", [])
+
+        # RapidAPI / other compatible shape:
+        #
+        # {
+        #   "data": [...]
+        # }
+        elif isinstance(raw_data, list):
+            jobs = raw_data
 
         else:
-            payload = raw_data
-            data_shape = type(raw_data).__name__
+            jobs = []
 
-        if not isinstance(payload, list):
+        if not isinstance(jobs, list):
             log.warning(
-                "JSearch unexpected response | "
-                "backend=%s | status=%r | request_id=%r | data_shape=%s",
-                self.backend,
-                data.get("status"),
-                data.get("request_id"),
-                data_shape,
+                "JSearch jobs field had unexpected type=%s",
+                type(jobs).__name__,
             )
             return []
 
         log.info(
-            "JSearch API response | "
-            "backend=%s | status=%r | request_id=%r | "
-            "jobs=%d | data_shape=%s",
+            "JSearch parsed response | "
+            "backend=%s | jobs=%d",
             self.backend,
-            data.get("status"),
-            data.get("request_id"),
-            len(payload),
-            data_shape,
+            len(jobs),
         )
 
-        return payload
+        if jobs:
+            first = jobs[0]
+
+            log.info(
+                "JSearch first result | "
+                "title=%r | employer=%r | location=%r",
+                first.get("job_title"),
+                first.get("employer_name"),
+                first.get("job_location"),
+            )
+
+        else:
+            log.warning(
+                "JSearch returned ZERO jobs | "
+                "status=%r | request_id=%r",
+                data.get("status"),
+                data.get("request_id"),
+            )
+
+        return jobs
