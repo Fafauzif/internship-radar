@@ -1,0 +1,72 @@
+name: Internship Radar
+
+on:
+  schedule:
+    - cron: '17 8 * * *'
+      timezone: 'Asia/Jakarta'
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        required: true
+        default: 'manual'
+        type: choice
+        options:
+          - manual
+          - scheduled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: internship-radar
+  cancel-in-progress: false
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      PYTHONPATH: src
+
+      JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
+      EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      APPS_SCRIPT_WEBHOOK_URL: ${{ secrets.APPS_SCRIPT_WEBHOOK_URL }}
+      WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+
+      JSEARCH_BACKEND: ${{ vars.JSEARCH_BACKEND }}
+      LOG_LEVEL: INFO
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Validate configuration
+        run: python -m internship_radar.main --validate-only
+
+      - name: Run unit tests
+        run: pytest -q
+
+      - name: Run Internship Radar
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            MODE="${{ inputs.mode }}"
+          else
+            MODE="scheduled"
+          fi
+
+          python -m internship_radar.main --mode "$MODE"
