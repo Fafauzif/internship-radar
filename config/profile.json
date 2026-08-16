@@ -1,0 +1,127 @@
+{
+  "profile_id": "fauzi",
+  "education": {
+    "university": "Universitas Indonesia",
+    "degree_level": "Undergraduate",
+    "major": "English Studies",
+    "current_semester": 5,
+    "expected_graduation": "2028-08"
+  },
+  "current_availability": {
+    "remote_part_time_only": true,
+    "notes": "Semester 5: remote and part-time. Full-time, hybrid, and on-site become available from Semester 6 onward."
+  },
+  "geography": {
+    "tier_1": [
+      "Indonesia",
+      "Jakarta",
+      "Greater Jakarta"
+    ],
+    "tier_2": [
+      "Singapore",
+      "Malaysia",
+      "Thailand",
+      "Vietnam"
+    ],
+    "tier_3": [
+      "Remote Global"
+    ]
+  },
+  "career_tracks": [
+    {
+      "name": "Marketing/Growth",
+      "priority": 1,
+      "evidence_strength": 96,
+      "evidence": [
+        "Director of Marketing, TEDxUniversitasIndonesia 2027",
+        "32-page annual marketing strategy",
+        "Campaign leadership with measurable views, engagement, and attributed follows",
+        "Program Branding Manager, G-Consulting"
+      ]
+    },
+    {
+      "name": "Consulting/Strategy",
+      "priority": 2,
+      "evidence_strength": 91,
+      "evidence": [
+        "Project Leader, MavenPRO x Puri Depok Mas consulting engagement",
+        "Brand audit, survey research, interviews, customer-journey mapping, competitor benchmarking",
+        "20-slide client communications strategy and presentation",
+        "Multiple business case and business plan competition placements"
+      ]
+    },
+    {
+      "name": "Business Development",
+      "priority": 3,
+      "evidence_strength": 84,
+      "evidence": [
+        "External partnerships and media/organizational relationship management at G-Consulting",
+        "Partnership development and external affairs experience"
+      ]
+    },
+    {
+      "name": "Communication/PR",
+      "priority": 4,
+      "evidence_strength": 94,
+      "evidence": [
+        "Strategic communications planning and copywriting",
+        "SEO and content writing experience",
+        "Public speaking, debate, speech, MC, and client presentation experience"
+      ]
+    },
+    {
+      "name": "Sustainability/Impact",
+      "priority": 5,
+      "evidence_strength": 68,
+      "evidence": [
+        "UI SDGs Summit experience",
+        "Climate issues, renewable energy, energy transition, and climate justice volunteer exposure",
+        "Youth education and community-building interests"
+      ]
+    }
+  ],
+  "skills": [
+    "strategic marketing",
+    "integrated communications planning",
+    "content strategy",
+    "social media campaign management",
+    "social media analytics",
+    "partnership development",
+    "media relations",
+    "copywriting",
+    "brand voice development",
+    "search engine optimization",
+    "communications research",
+    "audience research",
+    "survey interpretation",
+    "competitor benchmarking",
+    "customer journey mapping",
+    "project leadership",
+    "team delegation",
+    "deadline coordination",
+    "editing",
+    "quality control",
+    "client presentation",
+    "public speaking",
+    "event hosting",
+    "research synthesis",
+    "Google Apps Script",
+    "Google Sheets workflow automation",
+    "Canva",
+    "Figma",
+    "Microsoft Office"
+  ],
+  "interests": [
+    "sustainability",
+    "environmental impact",
+    "social impact",
+    "climate",
+    "renewable energy",
+    "energy transition",
+    "youth education",
+    "community building"
+  ],
+  "minimum_recommended_fit": 45,
+  "privacy_note": "This matching profile intentionally excludes personal email, phone number, exact address, GPA, and other data unnecessary for job matching.",
+  "timezone": "Asia/Jakarta"
+}

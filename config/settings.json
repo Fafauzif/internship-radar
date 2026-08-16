@@ -1,0 +1,20 @@
+{
+  "timezone": "Asia/Jakarta",
+  "gemini_model": "gemini-2.5-flash-lite",
+  "budgets": {
+    "jsearch_monthly_cap": 190,
+    "exa_monthly_budget_usd": 4.0,
+    "jsearch_max_per_run": 5,
+    "exa_max_per_run": 16,
+    "gemini_max_per_run": 40,
+    "exa_estimated_search_cost_usd": 0.007
+  },
+  "pipeline": {
+    "exa_results_per_query": 10,
+    "manual_budget_multiplier": 1.0
+  },
+  "notifications": {
+    "enabled": true,
+    "minimum_fit": 72
+  }
+}
