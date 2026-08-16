@@ -16,7 +16,13 @@ from .filtering import is_candidate_for_ai
 from .models import RadarRecord, RawOpportunity, RunStats
 from .normalize import normalize_exa, normalize_jsearch
 from .planner import plan_queries
-from .scoring import action_priority, career_fit_score, fit_band, priority_bucket, summary_reason
+from .scoring import (
+    action_priority,
+    career_fit_score,
+    fit_band,
+    priority_bucket,
+    summary_reason,
+)
 
 log = logging.getLogger(__name__)
 
@@ -25,53 +31,141 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _budget_available(settings: dict[str, Any], usage: UsageSnapshot) -> tuple[int, int]:
+def _budget_available(
+    settings: dict[str, Any],
+    usage: UsageSnapshot,
+) -> tuple[int, int]:
     b = settings["budgets"]
-    j_remaining = max(0, int(b["jsearch_monthly_cap"]) - usage.jsearch_requests)
-    exa_budget_remaining = max(0.0, float(b["exa_monthly_budget_usd"]) - usage.exa_cost_usd)
-    # Standard Exa search is configured as an estimate only; actual response cost is logged and authoritative.
-    estimated_cost = float(b.get("exa_estimated_search_cost_usd", 0.007))
-    e_remaining = int(exa_budget_remaining / estimated_cost) if estimated_cost > 0 else 0
+
+    j_remaining = max(
+        0,
+        int(b["jsearch_monthly_cap"]) - usage.jsearch_requests,
+    )
+
+    exa_budget_remaining = max(
+        0.0,
+        float(b["exa_monthly_budget_usd"]) - usage.exa_cost_usd,
+    )
+
+    # Standard Exa search is configured as an estimate only;
+    # actual response cost is logged and authoritative.
+    estimated_cost = float(
+        b.get("exa_estimated_search_cost_usd", 0.007)
+    )
+
+    e_remaining = (
+        int(exa_budget_remaining / estimated_cost)
+        if estimated_cost > 0
+        else 0
+    )
+
     return j_remaining, e_remaining
 
 
-def _enrich_from_ai(opp: RawOpportunity, ai: Any) -> None:
+def _enrich_from_ai(
+    opp: RawOpportunity,
+    ai: Any,
+) -> None:
     if not opp.company and ai.employer_name:
         opp.company = ai.employer_name
+
     if ai.normalized_title and not opp.title:
         opp.title = ai.normalized_title
-    if ai.work_mode != "UNKNOWN" and opp.remote_type == "UNKNOWN":
+
+    if (
+        ai.work_mode != "UNKNOWN"
+        and opp.remote_type == "UNKNOWN"
+    ):
         opp.remote_type = ai.work_mode
-    if ai.schedule_type != "UNKNOWN" and opp.employment_type == "UNKNOWN":
+
+    if (
+        ai.schedule_type != "UNKNOWN"
+        and opp.employment_type == "UNKNOWN"
+    ):
         opp.employment_type = ai.schedule_type
+
     if not opp.deadline and ai.deadline:
         opp.deadline = ai.deadline
+
     if not opp.start_date and ai.start_date:
         opp.start_date = ai.start_date
+
     if not opp.duration and ai.duration:
         opp.duration = ai.duration
+
     recompute_identity(opp)
 
 
-def _to_radar(opp: RawOpportunity, ai: Any, profile: dict[str, Any]) -> RadarRecord:
-    eligibility, eligibility_reason, timezone_compatibility = evaluate_eligibility(opp, ai, profile)
-    fit, parts = career_fit_score(profile, opp, ai)
-    if eligibility != "NOT_RECOMMENDED" and fit < int(profile.get("minimum_recommended_fit", 45)):
+def _to_radar(
+    opp: RawOpportunity,
+    ai: Any,
+    profile: dict[str, Any],
+) -> RadarRecord:
+    (
+        eligibility,
+        eligibility_reason,
+        timezone_compatibility,
+    ) = evaluate_eligibility(
+        opp,
+        ai,
+        profile,
+    )
+
+    fit, parts = career_fit_score(
+        profile,
+        opp,
+        ai,
+    )
+
+    if (
+        eligibility != "NOT_RECOMMENDED"
+        and fit
+        < int(
+            profile.get(
+                "minimum_recommended_fit",
+                45,
+            )
+        )
+    ):
         eligibility = "NOT_RECOMMENDED"
-        eligibility_reason = f"Career fit {fit}/100 is below the configured minimum."
+        eligibility_reason = (
+            f"Career fit {fit}/100 is below "
+            "the configured minimum."
+        )
+
     deadline = ai.deadline or opp.deadline
-    priority = action_priority(fit, eligibility, ai)
-    compensation = ai.compensation_text or ai.compensation_status
+
+    priority = action_priority(
+        fit,
+        eligibility,
+        ai,
+    )
+
+    compensation = (
+        ai.compensation_text
+        or ai.compensation_status
+    )
+
     return RadarRecord(
         opportunity_id=opp.opportunity_id,
         company=opp.company or ai.employer_name,
         title=ai.normalized_title or opp.title,
         category=ai.role_category,
-        location=opp.location or ai.location_requirement,
-        work_mode=ai.work_mode if ai.work_mode != "UNKNOWN" else opp.remote_type,
+        location=(
+            opp.location
+            or ai.location_requirement
+        ),
+        work_mode=(
+            ai.work_mode
+            if ai.work_mode != "UNKNOWN"
+            else opp.remote_type
+        ),
         schedule_type=ai.schedule_type,
         deadline=deadline,
-        start_date=ai.start_date or opp.start_date,
+        start_date=(
+            ai.start_date
+            or opp.start_date
+        ),
         compensation=compensation,
         eligibility=eligibility,
         eligibility_reason=eligibility_reason,
@@ -79,15 +173,39 @@ def _to_radar(opp: RawOpportunity, ai: Any, profile: dict[str, Any]) -> RadarRec
         career_fit_score=fit,
         fit_band=fit_band(fit),
         action_priority=priority,
-        priority_bucket=priority_bucket(eligibility, deadline, str(profile.get("timezone", "Asia/Jakarta"))),
+        priority_bucket=priority_bucket(
+            eligibility,
+            deadline,
+            str(
+                profile.get(
+                    "timezone",
+                    "Asia/Jakarta",
+                )
+            ),
+        ),
         evaluation_confidence=ai.confidence,
-        missing_critical_fields=" | ".join(ai.missing_critical_fields),
-        required_skills=" | ".join(ai.required_skills),
-        preferred_skills=" | ".join(ai.preferred_skills),
-        summary_reason=summary_reason(ai, fit, parts, eligibility),
-        application_url=opp.application_url or opp.canonical_url,
+        missing_critical_fields=" | ".join(
+            ai.missing_critical_fields
+        ),
+        required_skills=" | ".join(
+            ai.required_skills
+        ),
+        preferred_skills=" | ".join(
+            ai.preferred_skills
+        ),
+        summary_reason=summary_reason(
+            ai,
+            fit,
+            parts,
+            eligibility,
+        ),
+        application_url=(
+            opp.application_url
+            or opp.canonical_url
+        ),
         evaluated_at=utcnow(),
     )
+
 
 def run_pipeline(
     settings: dict[str, Any],
@@ -103,6 +221,10 @@ def run_pipeline(
 
     errors: list[str] = []
 
+    # ---------------------------------------------------------
+    # APPS SCRIPT / USAGE
+    # ---------------------------------------------------------
+
     webhook = AppsScriptWebhookClient(
         os.environ["APPS_SCRIPT_WEBHOOK_URL"],
         os.environ["WEBHOOK_SECRET"],
@@ -110,13 +232,18 @@ def run_pipeline(
 
     try:
         usage = webhook.usage_snapshot()
+
     except Exception as exc:
+        # Fail closed so API budget cannot be burned blindly.
         raise RuntimeError(
-            f"Could not read monthly usage from Apps Script; "
+            "Could not read monthly usage from Apps Script; "
             f"refusing to spend API budget: {exc}"
         ) from exc
 
-    j_remaining, e_remaining = _budget_available(settings, usage)
+    j_remaining, e_remaining = _budget_available(
+        settings,
+        usage,
+    )
 
     j_plan, e_plan = plan_queries(
         searches,
@@ -137,17 +264,39 @@ def run_pipeline(
         os.environ["JSEARCH_API_KEY"]
     )
 
+    # FakeJSearch used in tests does not expose .backend,
+    # so use a safe fallback instead of crashing.
+    jsearch_backend = getattr(
+        j_client,
+        "backend",
+        os.getenv(
+            "JSEARCH_BACKEND",
+            "unknown",
+        ),
+    )
+
     log.info(
         "JSearch starting | backend=%s | planned_queries=%d",
-        j_client.backend,
+        jsearch_backend,
         len(j_plan),
     )
 
-    for index, item in enumerate(j_plan, start=1):
+    for index, item in enumerate(
+        j_plan,
+        start=1,
+    ):
         try:
             query = item["query"]
-            country = item.get("country", "id")
-            date_posted = item.get("date_posted", "month")
+
+            country = item.get(
+                "country",
+                "id",
+            )
+
+            date_posted = item.get(
+                "date_posted",
+                "month",
+            )
 
             run.jsearch_requests += 1
 
@@ -158,11 +307,15 @@ def run_pipeline(
             )
 
             log.info(
-                "JSearch OK | query=%d/%d | backend=%s | "
-                "country=%s | jobs=%d | query=%r",
+                "JSearch OK | "
+                "query=%d/%d | "
+                "backend=%s | "
+                "country=%s | "
+                "jobs=%d | "
+                "query=%r",
                 index,
                 len(j_plan),
-                j_client.backend,
+                jsearch_backend,
                 country,
                 len(jobs),
                 query,
@@ -170,8 +323,10 @@ def run_pipeline(
 
             if not jobs:
                 log.warning(
-                    "JSearch ZERO RESULTS | query=%d/%d | "
-                    "country=%s | query=%r",
+                    "JSearch ZERO RESULTS | "
+                    "query=%d/%d | "
+                    "country=%s | "
+                    "query=%r",
                     index,
                     len(j_plan),
                     country,
@@ -179,22 +334,32 @@ def run_pipeline(
                 )
 
             opportunities.extend(
-                normalize_jsearch(job, query)
+                normalize_jsearch(
+                    job,
+                    query,
+                )
                 for job in jobs
             )
 
         except Exception as exc:
             errors.append(
-                f"JSearch[{item.get('query', '?')}]: {exc}"
+                f"JSearch["
+                f"{item.get('query', '?')}"
+                f"]: {exc}"
             )
 
             log.exception(
-                "JSearch FAILED | query=%d/%d | "
-                "backend=%s | query=%r",
+                "JSearch FAILED | "
+                "query=%d/%d | "
+                "backend=%s | "
+                "query=%r",
                 index,
                 len(j_plan),
-                j_client.backend,
-                item.get("query", "?"),
+                jsearch_backend,
+                item.get(
+                    "query",
+                    "?",
+                ),
             )
 
     # ---------------------------------------------------------
@@ -215,7 +380,10 @@ def run_pipeline(
         )
     )
 
-    for index, item in enumerate(e_plan, start=1):
+    for index, item in enumerate(
+        e_plan,
+        start=1,
+    ):
         try:
             query = item["query"]
 
@@ -233,8 +401,11 @@ def run_pipeline(
             run.exa_cost_usd += result.cost_usd
 
             log.info(
-                "Exa OK | query=%d/%d | results=%d | "
-                "cost=$%.4f | query=%r",
+                "Exa OK | "
+                "query=%d/%d | "
+                "results=%d | "
+                "cost=$%.4f | "
+                "query=%r",
                 index,
                 len(e_plan),
                 len(result.results),
@@ -243,13 +414,18 @@ def run_pipeline(
             )
 
             opportunities.extend(
-                normalize_exa(row, query)
+                normalize_exa(
+                    row,
+                    query,
+                )
                 for row in result.results
             )
 
         except Exception as exc:
             errors.append(
-                f"Exa[{item.get('query', '?')}]: {exc}"
+                f"Exa["
+                f"{item.get('query', '?')}"
+                f"]: {exc}"
             )
 
             log.exception(
@@ -257,10 +433,12 @@ def run_pipeline(
             )
 
     # ---------------------------------------------------------
-    # DEDUPLICATION
+    # FIRST DEDUPLICATION PASS
     # ---------------------------------------------------------
 
-    run.opportunities_discovered = len(opportunities)
+    run.opportunities_discovered = len(
+        opportunities
+    )
 
     opportunities = deduplicate(
         opportunities
@@ -295,6 +473,11 @@ def run_pipeline(
 
     radar: list[RadarRecord] = []
 
+    log.info(
+        "Gemini evaluation starting | candidates=%d",
+        len(candidates),
+    )
+
     # ---------------------------------------------------------
     # GEMINI EVALUATION
     # ---------------------------------------------------------
@@ -322,7 +505,9 @@ def run_pipeline(
             )
 
             log.info(
-                "Gemini OK | job=%d/%d | title=%r",
+                "Gemini OK | "
+                "job=%d/%d | "
+                "title=%r",
                 index,
                 len(candidates),
                 opp.title,
@@ -330,7 +515,9 @@ def run_pipeline(
 
         except Exception as exc:
             errors.append(
-                f"Gemini[{opp.title[:60]}]: {exc}"
+                f"Gemini["
+                f"{opp.title[:60]}"
+                f"]: {exc}"
             )
 
             log.exception(
@@ -338,9 +525,11 @@ def run_pipeline(
             )
 
     # ---------------------------------------------------------
-    # SECOND DEDUPE PASS
+    # SECOND DEDUPLICATION PASS
     # ---------------------------------------------------------
 
+    # AI enrichment can improve company/title metadata,
+    # allowing a stronger duplicate pass.
     opportunities = deduplicate(
         opportunities
     )
@@ -441,28 +630,32 @@ def run_pipeline(
         sync.get(
             "raw_inserted",
             0,
-        ) or 0
+        )
+        or 0
     )
 
     run.raw_updated = int(
         sync.get(
             "raw_updated",
             0,
-        ) or 0
+        )
+        or 0
     )
 
     run.radar_inserted = int(
         sync.get(
             "radar_inserted",
             0,
-        ) or 0
+        )
+        or 0
     )
 
     run.radar_updated = int(
         sync.get(
             "radar_updated",
             0,
-        ) or 0
+        )
+        or 0
     )
 
     return run
