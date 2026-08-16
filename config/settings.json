@@ -1,6 +1,6 @@
 {
   "timezone": "Asia/Jakarta",
-  "gemini_model": "gemini-2.5-flash-lite",
+  "gemini_model": "gemini-3.1-flash-lite",
   "budgets": {
     "jsearch_monthly_cap": 190,
     "exa_monthly_budget_usd": 4.0,
