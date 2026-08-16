@@ -89,141 +89,380 @@ def _to_radar(opp: RawOpportunity, ai: Any, profile: dict[str, Any]) -> RadarRec
         evaluated_at=utcnow(),
     )
 
+def run_pipeline(
+    settings: dict[str, Any],
+    profile: dict[str, Any],
+    searches: dict[str, Any],
+    mode: str = "scheduled",
+) -> RunStats:
+    run = RunStats(
+        run_id=str(uuid.uuid4()),
+        mode=mode,
+        started_at=utcnow(),
+    )
 
-def run_pipeline(settings: dict[str, Any], profile: dict[str, Any], searches: dict[str, Any], mode: str = "scheduled") -> RunStats:
-    run = RunStats(run_id=str(uuid.uuid4()), mode=mode, started_at=utcnow())
     errors: list[str] = []
 
-    webhook = AppsScriptWebhookClient(os.environ["APPS_SCRIPT_WEBHOOK_URL"], os.environ["WEBHOOK_SECRET"])
+    webhook = AppsScriptWebhookClient(
+        os.environ["APPS_SCRIPT_WEBHOOK_URL"],
+        os.environ["WEBHOOK_SECRET"],
+    )
+
     try:
         usage = webhook.usage_snapshot()
     except Exception as exc:
-        # Failing closed protects the monthly budget. User can fix webhook rather than burn APIs blindly.
-        raise RuntimeError(f"Could not read monthly usage from Apps Script; refusing to spend API budget: {exc}") from exc
+        raise RuntimeError(
+            f"Could not read monthly usage from Apps Script; "
+            f"refusing to spend API budget: {exc}"
+        ) from exc
 
     j_remaining, e_remaining = _budget_available(settings, usage)
-    j_plan, e_plan = plan_queries(searches, settings, mode)
+
+    j_plan, e_plan = plan_queries(
+        searches,
+        settings,
+        mode,
+    )
+
     j_plan = j_plan[:j_remaining]
     e_plan = e_plan[:e_remaining]
 
     opportunities: list[RawOpportunity] = []
 
-j_client = JSearchClient(os.environ["JSEARCH_API_KEY"])
+    # ---------------------------------------------------------
+    # JSEARCH
+    # ---------------------------------------------------------
 
-log.info(
-    "JSearch starting | backend=%s | planned_queries=%d",
-    j_client.backend,
-    len(j_plan),
-)
+    j_client = JSearchClient(
+        os.environ["JSEARCH_API_KEY"]
+    )
 
-for index, item in enumerate(j_plan, start=1):
-    try:
-        query = item["query"]
-        country = item.get("country", "id")
-        date_posted = item.get("date_posted", "month")
+    log.info(
+        "JSearch starting | backend=%s | planned_queries=%d",
+        j_client.backend,
+        len(j_plan),
+    )
 
-        run.jsearch_requests += 1
+    for index, item in enumerate(j_plan, start=1):
+        try:
+            query = item["query"]
+            country = item.get("country", "id")
+            date_posted = item.get("date_posted", "month")
 
-        jobs = j_client.search(
-            query,
-            country=country,
-            date_posted=date_posted,
-        )
+            run.jsearch_requests += 1
 
-        log.info(
-            "JSearch OK | query=%d/%d | backend=%s | country=%s | jobs=%d | query=%r",
-            index,
-            len(j_plan),
-            j_client.backend,
-            country,
-            len(jobs),
-            query,
-        )
+            jobs = j_client.search(
+                query,
+                country=country,
+                date_posted=date_posted,
+            )
 
-        if not jobs:
-            log.warning(
-                "JSearch returned ZERO jobs | query=%d/%d | country=%s | query=%r",
+            log.info(
+                "JSearch OK | query=%d/%d | backend=%s | "
+                "country=%s | jobs=%d | query=%r",
                 index,
                 len(j_plan),
+                j_client.backend,
                 country,
+                len(jobs),
                 query,
             )
 
-        opportunities.extend(
-            normalize_jsearch(job, query)
-            for job in jobs
+            if not jobs:
+                log.warning(
+                    "JSearch ZERO RESULTS | query=%d/%d | "
+                    "country=%s | query=%r",
+                    index,
+                    len(j_plan),
+                    country,
+                    query,
+                )
+
+            opportunities.extend(
+                normalize_jsearch(job, query)
+                for job in jobs
+            )
+
+        except Exception as exc:
+            errors.append(
+                f"JSearch[{item.get('query', '?')}]: {exc}"
+            )
+
+            log.exception(
+                "JSearch FAILED | query=%d/%d | "
+                "backend=%s | query=%r",
+                index,
+                len(j_plan),
+                j_client.backend,
+                item.get("query", "?"),
+            )
+
+    # ---------------------------------------------------------
+    # EXA
+    # ---------------------------------------------------------
+
+    e_client = ExaClient(
+        os.environ["EXA_API_KEY"]
+    )
+
+    exa_results_per_query = int(
+        settings.get(
+            "pipeline",
+            {},
+        ).get(
+            "exa_results_per_query",
+            10,
         )
+    )
 
-    except Exception as exc:
-        errors.append(f"JSearch[{item.get('query', '?')}]: {exc}")
-
-        log.exception(
-            "JSearch FAILED | query=%d/%d | backend=%s | query=%r",
-            index,
-            len(j_plan),
-            j_client.backend,
-            item.get("query", "?"),
-        )
-
-    e_client = ExaClient(os.environ["EXA_API_KEY"])
-    exa_results_per_query = int(settings.get("pipeline", {}).get("exa_results_per_query", 10))
-    for item in e_plan:
+    for index, item in enumerate(e_plan, start=1):
         try:
             query = item["query"]
+
             run.exa_requests += 1
-            result = e_client.search(query, num_results=exa_results_per_query, user_location=item.get("user_location", "ID"))
+
+            result = e_client.search(
+                query,
+                num_results=exa_results_per_query,
+                user_location=item.get(
+                    "user_location",
+                    "ID",
+                ),
+            )
+
             run.exa_cost_usd += result.cost_usd
-            opportunities.extend(normalize_exa(row, query) for row in result.results)
+
+            log.info(
+                "Exa OK | query=%d/%d | results=%d | "
+                "cost=$%.4f | query=%r",
+                index,
+                len(e_plan),
+                len(result.results),
+                result.cost_usd,
+                query,
+            )
+
+            opportunities.extend(
+                normalize_exa(row, query)
+                for row in result.results
+            )
+
         except Exception as exc:
-            errors.append(f"Exa[{item.get('query','?')}]: {exc}")
-            log.exception("Exa query failed")
+            errors.append(
+                f"Exa[{item.get('query', '?')}]: {exc}"
+            )
+
+            log.exception(
+                "Exa query failed"
+            )
+
+    # ---------------------------------------------------------
+    # DEDUPLICATION
+    # ---------------------------------------------------------
 
     run.opportunities_discovered = len(opportunities)
-    opportunities = deduplicate(opportunities)
-    run.opportunities_after_dedupe = len(opportunities)
 
-    candidates = [opp for opp in opportunities if is_candidate_for_ai(opp)]
-    candidates = candidates[: int(settings["budgets"]["gemini_max_per_run"])]
-    gemini = GeminiClient(os.environ["GEMINI_API_KEY"], model=settings["gemini_model"])
+    opportunities = deduplicate(
+        opportunities
+    )
+
+    run.opportunities_after_dedupe = len(
+        opportunities
+    )
+
+    # ---------------------------------------------------------
+    # GEMINI CANDIDATE SELECTION
+    # ---------------------------------------------------------
+
+    candidates = [
+        opp
+        for opp in opportunities
+        if is_candidate_for_ai(opp)
+    ]
+
+    candidates = candidates[
+        : int(
+            settings["budgets"][
+                "gemini_max_per_run"
+            ]
+        )
+    ]
+
+    gemini = GeminiClient(
+        os.environ["GEMINI_API_KEY"],
+        model=settings["gemini_model"],
+    )
+
     radar: list[RadarRecord] = []
 
-    for opp in candidates:
+    # ---------------------------------------------------------
+    # GEMINI EVALUATION
+    # ---------------------------------------------------------
+
+    for index, opp in enumerate(
+        candidates,
+        start=1,
+    ):
         try:
             ai = gemini.extract(opp)
+
             run.gemini_calls += 1
-            _enrich_from_ai(opp, ai)
-            radar.append(_to_radar(opp, ai, profile))
+
+            _enrich_from_ai(
+                opp,
+                ai,
+            )
+
+            radar.append(
+                _to_radar(
+                    opp,
+                    ai,
+                    profile,
+                )
+            )
+
+            log.info(
+                "Gemini OK | job=%d/%d | title=%r",
+                index,
+                len(candidates),
+                opp.title,
+            )
+
         except Exception as exc:
-            errors.append(f"Gemini[{opp.title[:60]}]: {exc}")
-            log.exception("Gemini extraction failed")
+            errors.append(
+                f"Gemini[{opp.title[:60]}]: {exc}"
+            )
 
-    # AI enrichment can improve company/title metadata, allowing a second stronger dedupe pass.
-    opportunities = deduplicate(opportunities)
-    by_id = {x.opportunity_id: x for x in opportunities}
-    radar = [r for r in radar if r.opportunity_id in by_id]
-    radar_by_id = {r.opportunity_id: r for r in radar}
-    radar = list(radar_by_id.values())
-    run.opportunities_after_dedupe = len(opportunities)
-    run.opportunities_evaluated = len(radar)
+            log.exception(
+                "Gemini extraction failed"
+            )
 
-    run.status = "PARTIAL_SUCCESS" if errors else "SUCCESS"
+    # ---------------------------------------------------------
+    # SECOND DEDUPE PASS
+    # ---------------------------------------------------------
+
+    opportunities = deduplicate(
+        opportunities
+    )
+
+    by_id = {
+        x.opportunity_id: x
+        for x in opportunities
+    }
+
+    radar = [
+        r
+        for r in radar
+        if r.opportunity_id in by_id
+    ]
+
+    radar_by_id = {
+        r.opportunity_id: r
+        for r in radar
+    }
+
+    radar = list(
+        radar_by_id.values()
+    )
+
+    run.opportunities_after_dedupe = len(
+        opportunities
+    )
+
+    run.opportunities_evaluated = len(
+        radar
+    )
+
+    # ---------------------------------------------------------
+    # RUN STATUS
+    # ---------------------------------------------------------
+
+    run.status = (
+        "PARTIAL_SUCCESS"
+        if errors
+        else "SUCCESS"
+    )
+
     if not opportunities and errors:
         run.status = "FAILED"
-    run.error_summary = " || ".join(errors)[:10000]
+
+    run.error_summary = " || ".join(
+        errors
+    )[:10000]
+
     run.completed_at = utcnow()
+
+    # ---------------------------------------------------------
+    # APPS SCRIPT SYNC
+    # ---------------------------------------------------------
 
     payload = {
         "action": "sync",
-        "raw_opportunities": [x.to_dict() for x in opportunities],
-        "radar": [x.to_dict() for x in radar],
+        "raw_opportunities": [
+            x.to_dict()
+            for x in opportunities
+        ],
+        "radar": [
+            x.to_dict()
+            for x in radar
+        ],
         "run": run.to_dict(),
-        "notify": bool(settings.get("notifications", {}).get("enabled", True)),
-        "notification_min_fit": int(settings.get("notifications", {}).get("minimum_fit", 72)),
+        "notify": bool(
+            settings.get(
+                "notifications",
+                {},
+            ).get(
+                "enabled",
+                True,
+            )
+        ),
+        "notification_min_fit": int(
+            settings.get(
+                "notifications",
+                {},
+            ).get(
+                "minimum_fit",
+                72,
+            )
+        ),
     }
-    response = webhook.post(payload, timeout=90)
-    sync = response.get("sync", {})
-    run.raw_inserted = int(sync.get("raw_inserted", 0) or 0)
-    run.raw_updated = int(sync.get("raw_updated", 0) or 0)
-    run.radar_inserted = int(sync.get("radar_inserted", 0) or 0)
-    run.radar_updated = int(sync.get("radar_updated", 0) or 0)
+
+    response = webhook.post(
+        payload,
+        timeout=90,
+    )
+
+    sync = response.get(
+        "sync",
+        {},
+    )
+
+    run.raw_inserted = int(
+        sync.get(
+            "raw_inserted",
+            0,
+        ) or 0
+    )
+
+    run.raw_updated = int(
+        sync.get(
+            "raw_updated",
+            0,
+        ) or 0
+    )
+
+    run.radar_inserted = int(
+        sync.get(
+            "radar_inserted",
+            0,
+        ) or 0
+    )
+
+    run.radar_updated = int(
+        sync.get(
+            "radar_updated",
+            0,
+        ) or 0
+    )
+
     return run
