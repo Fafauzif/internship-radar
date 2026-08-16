@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from ..http_utils import request_json
 
@@ -46,7 +49,32 @@ class JSearchClient:
                 attempts=1,
             )
 
-        payload = data.get("data", [])
-        if isinstance(payload, dict):
-            payload = payload.get("jobs", payload.get("results", []))
-        return payload if isinstance(payload, list) else []
+        raw_data = data.get("data", [])
+
+if isinstance(raw_data, dict):
+    payload = raw_data.get("jobs", raw_data.get("results", []))
+    data_shape = f"dict keys={list(raw_data.keys())}"
+else:
+    payload = raw_data
+    data_shape = type(raw_data).__name__
+
+if not isinstance(payload, list):
+    log.warning(
+        "JSearch unexpected response | backend=%s | status=%r | request_id=%r | data_shape=%s",
+        self.backend,
+        data.get("status"),
+        data.get("request_id"),
+        data_shape,
+    )
+    return []
+
+log.info(
+    "JSearch API response | backend=%s | status=%r | request_id=%r | jobs=%d | data_shape=%s",
+    self.backend,
+    data.get("status"),
+    data.get("request_id"),
+    len(payload),
+    data_shape,
+)
+
+return payload
