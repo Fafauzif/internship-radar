@@ -108,16 +108,62 @@ def run_pipeline(settings: dict[str, Any], profile: dict[str, Any], searches: di
 
     opportunities: list[RawOpportunity] = []
 
-    j_client = JSearchClient(os.environ["JSEARCH_API_KEY"])
-    for item in j_plan:
-        try:
-            query = item["query"]
-            run.jsearch_requests += 1
-            jobs = j_client.search(query, country=item.get("country", "id"), date_posted=item.get("date_posted", "month"))
-            opportunities.extend(normalize_jsearch(job, query) for job in jobs)
-        except Exception as exc:
-            errors.append(f"JSearch[{item.get('query','?')}]: {exc}")
-            log.exception("JSearch query failed")
+j_client = JSearchClient(os.environ["JSEARCH_API_KEY"])
+
+log.info(
+    "JSearch starting | backend=%s | planned_queries=%d",
+    j_client.backend,
+    len(j_plan),
+)
+
+for index, item in enumerate(j_plan, start=1):
+    try:
+        query = item["query"]
+        country = item.get("country", "id")
+        date_posted = item.get("date_posted", "month")
+
+        run.jsearch_requests += 1
+
+        jobs = j_client.search(
+            query,
+            country=country,
+            date_posted=date_posted,
+        )
+
+        log.info(
+            "JSearch OK | query=%d/%d | backend=%s | country=%s | jobs=%d | query=%r",
+            index,
+            len(j_plan),
+            j_client.backend,
+            country,
+            len(jobs),
+            query,
+        )
+
+        if not jobs:
+            log.warning(
+                "JSearch returned ZERO jobs | query=%d/%d | country=%s | query=%r",
+                index,
+                len(j_plan),
+                country,
+                query,
+            )
+
+        opportunities.extend(
+            normalize_jsearch(job, query)
+            for job in jobs
+        )
+
+    except Exception as exc:
+        errors.append(f"JSearch[{item.get('query', '?')}]: {exc}")
+
+        log.exception(
+            "JSearch FAILED | query=%d/%d | backend=%s | query=%r",
+            index,
+            len(j_plan),
+            j_client.backend,
+            item.get("query", "?"),
+        )
 
     e_client = ExaClient(os.environ["EXA_API_KEY"])
     exa_results_per_query = int(settings.get("pipeline", {}).get("exa_results_per_query", 10))
